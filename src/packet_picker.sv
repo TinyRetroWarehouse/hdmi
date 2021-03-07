@@ -3,17 +3,18 @@
 
 module packet_picker
 #(
-    parameter int VIDEO_ID_CODE,
-    parameter real VIDEO_RATE,
-    parameter int AUDIO_BIT_WIDTH,
-    parameter int AUDIO_RATE,
-    parameter bit [8*8-1:0] VENDOR_NAME,
-    parameter bit [8*16-1:0] PRODUCT_DESCRIPTION,
-    parameter bit [7:0] SOURCE_DEVICE_INFORMATION
+    parameter int VIDEO_ID_CODE = 4,
+    parameter real VIDEO_RATE = 0,
+    parameter int AUDIO_BIT_WIDTH = 0,
+    parameter int AUDIO_RATE = 0,
+    parameter bit [8*8-1:0] VENDOR_NAME = 0,
+    parameter bit [8*16-1:0] PRODUCT_DESCRIPTION = 0,
+    parameter bit [7:0] SOURCE_DEVICE_INFORMATION = 0
 )
 (
     input logic clk_pixel,
     input logic clk_audio,
+    input logic reset,
     input logic video_field_end,
     input logic packet_enable,
     input logic [4:0] packet_pixel_counter,
@@ -27,14 +28,21 @@ logic [7:0] packet_type = 8'd0;
 logic [23:0] headers [255:0];
 logic [55:0] subs [255:0] [3:0];
 assign header = headers[packet_type];
-assign sub = subs[packet_type];
+assign sub[0] = subs[packet_type][0];
+assign sub[1] = subs[packet_type][1];
+assign sub[2] = subs[packet_type][2];
+assign sub[3] = subs[packet_type][3];
 
 // NULL packet
 // "An HDMI Sink shall ignore bytes HB1 and HB2 of the Null Packet Header and all bytes of the Null Packet Body."
 `ifdef MODEL_TECH
 assign headers[0] = {8'd0, 8'd0, 8'd0}; assign subs[0] = '{56'd0, 56'd0, 56'd0, 56'd0};
 `else
-assign headers[0] = {8'dX, 8'dX, 8'd0}; assign subs[0] = '{56'dX, 56'dX, 56'dX, 56'dX};
+assign headers[0] = {8'dX, 8'dX, 8'd0};
+assign subs[0][0] = 56'dX;
+assign subs[0][1] = 56'dX;
+assign subs[0][2] = 56'dX;
+assign subs[0][3] = 56'dX;
 `endif
 
 // Audio Clock Regeneration Packet
@@ -108,7 +116,11 @@ logic [7:0] frame_counter = 8'd0;
 int k;
 always_ff @(posedge clk_pixel)
 begin
-    if (packet_pixel_counter == 5'd31 && packet_type == 8'h02) // Keep track of current IEC 60958 frame
+    if (reset)
+    begin
+        frame_counter <= 8'd0;
+    end
+    else if (packet_pixel_counter == 5'd31 && packet_type == 8'h02) // Keep track of current IEC 60958 frame
     begin
         frame_counter = frame_counter + 8'd4;
         if (frame_counter >= 8'd192)
@@ -137,7 +149,7 @@ begin
     if (sample_buffer_used)
         sample_buffer_used <= 1'b0;
 
-    if (video_field_end)
+    if (reset || video_field_end)
     begin
         audio_info_frame_sent <= 1'b0;
         auxiliary_video_information_info_frame_sent <= 1'b0;

@@ -51,9 +51,9 @@ endgenerate
 
 always @(posedge top.clk_pixel)
 begin
-  tmds_values[0] <= top.hdmi.tmds[0];
-  tmds_values[1] <= top.hdmi.tmds[1];
-  tmds_values[2] <= top.hdmi.tmds[2];
+  tmds_values[0] <= top.hdmi.tmds_internal[0];
+  tmds_values[1] <= top.hdmi.tmds_internal[1];
+  tmds_values[2] <= top.hdmi.tmds_internal[2];
 end
 
 logic [4:0] data_counter = 0;
@@ -87,6 +87,14 @@ logic [191:0] channel_status [1:0] = '{192'dX, 192'dX};
 // PB7-13 =  sub1
 // PB14-20 = sub2
 // PB21-27 = sub3
+
+// returns number of non-zero elements in array
+function int check_non_zero_elem(logic [7:0] a0[]);
+    check_non_zero_elem = 0;
+    for(int i=$low(a0); i <= $high(a0); i++)
+        if(a0[i] != 0) check_non_zero_elem++;
+endfunction
+
 logic [7:0] packet_bytes [0:27];
 for (i = 0; i < 28; i++)
 begin
@@ -102,13 +110,13 @@ always @(posedge top.clk_pixel)
 begin
   cx <= cx == top.frame_width - 1 ? 0 : cx + 1;
   cy <= cx == top.frame_width-1'b1 ? cy == top.frame_height-1'b1 ? 0 : cy + 1'b1 : cy;
-  if (top.hdmi.true_hdmi_output.num_packets_alongside > 0 && (cx >= 8 && cx < 10) || (cx >= 10 + top.hdmi.true_hdmi_output.num_packets_alongside * 32 && cx < 10 + top.hdmi.true_hdmi_output.num_packets_alongside * 32 + 2))
+  if (top.hdmi.true_hdmi_output.num_packets_alongside > 0 && (cx >= top.screen_width + 8 && cx < top.screen_width + 10) || (cx >= top.screen_width + 10 + top.hdmi.true_hdmi_output.num_packets_alongside * 32 && cx < top.screen_width + 10 + top.hdmi.true_hdmi_output.num_packets_alongside * 32 + 2))
   begin
     assert(tmds_values[2] == 10'b0100110011) else $fatal("Channel 2 DI GB incorrect: %b", tmds_values[2]);
     assert(tmds_values[1] == 10'b0100110011) else $fatal("Channel 1 DI GB incorrect");
     assert(tmds_values[0] == 10'b1010001110 || tmds_values[0] == 10'b1001110001 || tmds_values[0] == 10'b0101100011 || tmds_values[0] == 10'b1011000011) else $fatal("Channel 0 DI GB incorrect");
   end
-  else if (top.hdmi.true_hdmi_output.num_packets_alongside > 0 && cx >= 10 && cx < 10 + top.hdmi.true_hdmi_output.num_packets_alongside * 32)
+  else if (top.hdmi.true_hdmi_output.num_packets_alongside > 0 && cx >= top.screen_width + 10 && cx < top.screen_width + 10 + top.hdmi.true_hdmi_output.num_packets_alongside * 32)
   begin
     data_counter <= data_counter + 1'd1;
     if (data_counter == 0)
@@ -118,7 +126,7 @@ begin
       sub[1][63:1] <= 63'dX;
       sub[0][63:1] <= 63'dX;
       header[31:1] <= 31'dX;
-      if (cx != 10 || !first_packet) // Packet complete
+      if (cx != top.screen_width + 10 || !first_packet) // Packet complete
       begin
         first_packet <= 0;
         case(header[7:0])
@@ -151,8 +159,8 @@ begin
                 begin
                   assert(channel_status[0] == top.hdmi.true_hdmi_output.packet_picker.audio_sample_packet.channel_status_left) else $fatal("Incorrect left channel status: %h should be %h", channel_status[0], top.hdmi.true_hdmi_output.packet_picker.audio_sample_packet.channel_status_left);
                   assert(channel_status[1] == top.hdmi.true_hdmi_output.packet_picker.audio_sample_packet.channel_status_right) else $fatal("Incorrect right channel status: %h should be %h", channel_status[1], top.hdmi.true_hdmi_output.packet_picker.audio_sample_packet.channel_status_right);
-                  assert(previous_sample[0] - 1'd1 == L[k][23:8]) else $fatal("Expected left channel sample to be 1 less than previous");
-                  assert(previous_sample[1] + 1'd1 == R[k][23:8]) else $fatal("Expected right channel sample to be 1 greater than previous");
+                  assert(previous_sample[0] - 1'd1 == L[k][23:8]) else $fatal("Expected left channel sample to be 1 less than previous: %d - 1 != %d", previous_sample[0], L[k][23:8]);
+                  assert(previous_sample[1] + 1'd1 == R[k][23:8]) else $fatal("Expected right channel sample to be 1 greater than previous: %d + 1 != %d", previous_sample[1], R[k][23:8]);
                 end
                 first_audio_packet <= 0;
                 assert(header[20 + k] == 1'b1) else $fatal("Sample B value low for sample %d with counter %d", k, frame_counter);
@@ -163,26 +171,26 @@ begin
               assert(PCUVr[k][0] == 1'b0 && PCUVl[k][0] == 1'b0) else $fatal("Sample validity bits nonzero");
               assert({PCUVr[k][3:0], R[k]} % 2 == 0) else $fatal("Sample right parity not even: %b", {PCUVr[k], R[k]});
               assert({PCUVl[k][3:0], L[k]} % 2 == 0) else $fatal("Sample left parity not even: %b", {PCUVl[k], L[k]});
-              previous_sample = '{L[k][23:8], R[k][23:8]};
+              previous_sample = '{R[k][23:8], L[k][23:8]};
             end
             frame_counter <= (frame_counter + num_samples_present) % 192;
           end
           8'h82: begin
             $display("AVI InfoFrame");
             assert(packet_bytes.sum() + header[23:16] + header[15:8] + header[7:0] == 8'd0) else $fatal("Bad checksum");
-            assert(112'(packet_bytes[14:27]) == 0) else $fatal("Reserved bytes not 0");
+            assert(check_non_zero_elem(packet_bytes[14:27]) == 0) else $fatal("Reserved bytes not 0");
           end
           8'h83: begin
-            $display("SPD InfoFrame this is a %s created by %s that is a 0x%h", 128'(packet_bytes[9:24]), 64'(packet_bytes[1:8]), packet_bytes[25]);
+            $display("SPD InfoFrame this is a %s created by %s that is a 0x%h", string'(packet_bytes[9:24]), string'(packet_bytes[1:8]), packet_bytes[25]);
             assert(packet_bytes.sum() + header[23:16] + header[15:8] + header[7:0] == 8'd0) else $fatal("Bad checksum");
-            assert(16'(packet_bytes[26:27]) == 0) else $fatal("Reserved bytes not 0");
+            assert(check_non_zero_elem(packet_bytes[26:27]) == 0) else $fatal("Reserved bytes not 0");
           end
           8'h84: begin
             $display("Audio InfoFrame");
             assert(packet_bytes.sum() + header[23:16] + header[15:8] + header[7:0] == 8'd0) else $fatal("Bad checksum");
             assert(packet_bytes[1] == 8'd1) else $fatal("Only channel count of 2 should be set");
             assert(packet_bytes[2] == 8'd0 && packet_bytes[3] == 8'd0) else $fatal("These are refer to stream header");
-            assert(176'(packet_bytes[6:27]) == 0) else $fatal("Reserved bytes not 0");
+            assert(check_non_zero_elem(packet_bytes[6:27]) == 0) else $fatal("Reserved bytes not 0");
           end
           default: begin
             $fatal("Unhandled packet type %h (%s) at %d, %d: %p", header[7:0], "Unknown", cx, cy, sub);
